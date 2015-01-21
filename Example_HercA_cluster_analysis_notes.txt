@@ -1,0 +1,495 @@
+# Reduction and analysis for HERCULES A Chandra Observations
+# G. R. Tremblay (ESO), January 2013
+# 
+# grant.tremblay@eso.org
+#
+#
+# These notes cover the workflow from raw archive data to full spectral maps and profiles
+# 
+# Everything was done with CIAO v4.5, CALDB v4.5.5.1 and XSPEC v12.7.0
+###############################################################################################
+ 
+################################### 1. GET DATA FROM ARCHIVE ##################################
+
+# You need to start CIAO first (after having installed it, of course). 
+# on the command line, type “ciao”
+
+
+download_chandra_obsid 1625, 5796, 6257
+
+###############################################################################################
+ 
+ 
+
+################################### 2. REDUCE DATA TO LVL=2 ##################################
+# THE BELOW MUST BE ADAPTED TO YOUR SPECIFIC DIRECTORY TREE
+
+chandra_repro indir=1625 outdir=1625/repro verbose=5 cleanup=no 
+chandra_repro indir=5796 outdir=5796/repro verbose=5 cleanup=no 
+chandra_repro indir=6257 outdir=6257/repro verbose=5 cleanup=no
+
+###############################################################################################
+ 
+
+####################### 3. ALIGN THE 3 OBSERVATIONS TO SAME WCS/PHYSICAL ######################
+# Reproject the three ObsIDs to the same WCS tangent
+reproject_obs "*/repro/*evt2.fits" reprojected_data/ verbose=5
+###############################################################################################
+ 
+ 
+####################### 4. CREATE EXPOSURE-CORRECTED MERGED MOSAIC #############################
+ 
+flux_obs "reprojected_data/*reproj_evt.fits" exposure_corrected_mosaic/ bands=broad,csc bin=1 verbose=5
+# broad is 0.5-7 keV
+# The resultant fluxed mosaic will be used to create the contour bins and to make nice pretty pictures
+# Adaptively smooth the fluxed mosaic, copy to toplevel
+# Make an unsharp mask, copy to toplevel
+
+###############################################################################################
+ 
+
+####################### 5. ENERGY & TEMPORAL FILTERING OF SPECTRAL DATA########################
+
+# Filter the reprojected (aligned) event files in energy space, restrict attention to S3 chip
+ 
+punlearn dmcopy
+dmcopy "*reproj_evt.fits[energy=500:7000, ccd_id=7]" @outnames_efilt.lis opt=all clobber=yes
+# Note that I made lists of filenames to write ("outnames_*.lis")
+# Extract a background only lightcurve by excluding a circular region surrounding the science target
+dmcopy "*_reproj_efilt_s3_evt.fits[exclude sky=region(source.reg)]" @outnames_bg.lis opt=all clobber=yes
+# Visually confirm that the source is removed from the background-only files you have just created.
+# Create the lightcurves
+dmlist 1625_reproj_efilt_s3_BACKGROUND_evt.fits"[GTI7]" data
+#--------------------------------------------------------------------------------
+#Data for Table Block GTI7
+#--------------------------------------------------------------------------------
+# 
+#ROW START STOP
+# 
+# 1 112475198.3654411882 112490183.9654551297
+punlearn dmextract
+pset dmextract infile="1625_reproj_efilt_s3_BACKGROUND_evt.fits[bin time=112475198.3654411882:112490183.9654551297:259.28]"
+#The ACIS blank-sky background files were cleaned with a bin size of 259.28 seconds, so we use the same temporal binning
+
+pset dmextract outfile=1625_s3_bg.lc
+pset dmextract opt=ltc1
+dmextract clobber=yes
+deflare 1625_s3_bg.lc 1625_s3_bg_deflare.gti method=clean plot=yes
+# Now for the next obsid
+dmlist 5796_reproj_efilt_s3_BACKGROUND_evt.fits"[GTI7]" data
+#--------------------------------------------------------------------------------
+#Data for Table Block GTI7
+#--------------------------------------------------------------------------------
+
+#ROW START STOP
+# 
+# 1 232030989.3776677847 232057959.4224887788
+# 2 232057962.5634790361 232079166.4775751531
+punlearn dmextract
+pset dmextract infile="5796_reproj_efilt_s3_BACKGROUND_evt.fits[bin time=::259.28]"
+pset dmextract outfile=5796_s3_bg.lc
+pset dmextract opt=ltc1
+dmextract clobber=yes
+deflare 5796_s3_bg.lc 5796_s3_bg_deflare.gti method=clean plot=yes
+# Now for the next obsid
+
+dmlist 6257_reproj_efilt_s3_BACKGROUND_evt.fits"[GTI7]" data
+#--------------------------------------------------------------------------------
+#Data for Table Block GTI7
+#--------------------------------------------------------------------------------
+
+#ROW START STOP
+# 
+# 1 233382192.4267284274 233432365.9266319573
+
+punlearn dmextract
+pset dmextract infile="6257_reproj_efilt_s3_BACKGROUND_evt.fits[bin time=233382192.4267284274:233432365.9266319573:259.28]"
+pset dmextract outfile=6257_s3_bg.lc
+pset dmextract opt=ltc1
+dmextract clobber=yes
+
+deflare 6257_s3_bg.lc 6257_s3_bg_deflare.gti method=clean plot=yes
+ 
+# Now filter the event lists, check to see how the exposure times have changed
+dmcopy "1625_reproj_efilt_s3_evt.fits[@1625_s3_bg_deflare.gti]" 1625_reproj_clean.fits clobber=yes
+dmkeypar 1625_reproj_clean.fits EXPOSURE echo+
+# 14539.846482798 (so only 500 seconds were excluded)
+
+dmcopy "5796_reproj_efilt_s3_evt.fits[@5796_s3_bg_deflare.gti]" 5796_reproj_clean.fits clobber=yes 
+dmkeypar 5796_reproj_clean.fits EXPOSURE echo+
+#46776.853731029 (1 ksec excluded)
+
+dmcopy "6257_reproj_efilt_s3_evt.fits[@6257_s3_bg_deflare.gti]" 6257_reproj_clean.fits clobber=yes 
+dmkeypar 6257_reproj_clean.fits EXPOSURE echo+
+# 48619.540024595 (1 ksec excluded)
+ 
+####################### 6. MAKE BLANK SKY BACKGROUNDS ########################
+# Needed for extended sources (like the Herc A cluster) because the source fills
+# most of the chip - we need to therefore use a provided "blank sky" for spectral background subtraction
+# See thread: http://cxc.harvard.edu/ciao/threads/acisbackground/
+acis_bkgrnd_lookup 1625_reproj_clean.fits
+
+# /home/gtrembla/Repository/ciao-4.5/CALDB/data/chandra/acis/bkgrnd/acis7sD2000-12-01bkgrnd_ctiN0001.fits
+# The _clean.fits file has only ACIS S3 (chip 7) included, so it only returns one background file
+# Now make a local copy of this background file
+cp /home/gtrembla/Repository/ciao-4.5/CALDB/data/chandra/acis/bkgrnd/acis7sD2000-12-01bkgrnd_ctiN0001.fits ./bgevt2_s3.fits
+# Now we must tailor this background file to our datasets
+# First, all three ObsIDs were taken in VFAINT mode (meaning ACIS background cleaning has been done)
+# The period D background files are composed of VFAINT mode observations and have the "potential background event" 
+# status bit set to 1 (status bit 23). As no other status bits are set in the background files, it is simple to filter out these events:
+dmcopy "bgevt2_s3.fits[status=0]" bgevt2_s3_clean.fits
+# Make sure the GAINFILE for the background file and our science files is the same:
+dmkeypar 1625_reproj_clean.fits GAINFILE echo+
+dmkeypar 5796_reproj_clean.fits GAINFILE echo+
+dmkeypar 6257_reproj_clean.fits GAINFILE echo+
+# All three show: acisD2000-01-29gain_ctiN0006.fits
+dmkeypar bgevt2_s3_clean.fits GAINFILE echo+
+# acisD2000-01-29gain_ctiN0006.fits ... Good! they are the same.
+# Add pointing header keywords to the background file - first, we grab them from the science files
+dmmakepar 1625_reproj_clean.fits 1625_event_header.par
+grep _pnt 1625_event_header.par > 1625_event_pnt.par
+
+dmmakepar 5796_reproj_clean.fits 5796_event_header.par
+grep _pnt 5796_event_header.par > 5796_event_pnt.par
+
+dmmakepar 6257_reproj_clean.fits 6257_event_header.par
+grep _pnt 6257_event_header.par > 6257_event_pnt.par
+# Clone the clean background file into three versions, one for each science ObsID
+cp bgevt2_s3_clean.fits 1625_bgevt2_s3_notprojected.fits
+cp bgevt2_s3_clean.fits 5796_bgevt2_s3_notprojected.fits
+cp bgevt2_s3_clean.fits 6257_bgevt2_s3_notprojected.fits
+# Make these clones writable
+chmod +w *_bgevt2_s3_notprojected.fits
+# Migrate the pointing header keywords to the new clones (which still must be reprojected 
+# to the science files ... we do that below)
+dmreadpar 1625_event_pnt.par "1625_bgevt2_s3_notprojected.fits[events]" clobber+
+dmreadpar 5796_event_pnt.par "5796_bgevt2_s3_notprojected.fits[events]" clobber+
+dmreadpar 6257_event_pnt.par "6257_bgevt2_s3_notprojected.fits[events]" clobber+
+# Finally, reproject the background data to the science data 
+# Note that you must first copy the aspect solutions from the science files' repro/ directories into 
+# the working directory
+punlearn reproject_events
+pset reproject_events infile=1625_bgevt2_s3_notprojected.fits
+pset reproject_events outfile=1625_bkg_reproj_clean.fits
+pset reproject_events aspect=pcadf112474718N003_asol1.fits
+pset reproject_events match=1625_reproj_clean.fits
+pset reproject_events random=0
+reproject_events verbose=5 clobber=yes
+
+punlearn reproject_events
+pset reproject_events infile=5796_bgevt2_s3_notprojected.fits
+pset reproject_events outfile=5796_bkg_reproj_clean.fits
+pset reproject_events aspect=pcadf232030985N002_asol1.fits
+pset reproject_events match=5796_reproj_clean.fits
+pset reproject_events random=0
+reproject_events verbose=5 clobber=yes
+
+punlearn reproject_events
+pset reproject_events infile=6257_bgevt2_s3_notprojected.fits
+pset reproject_events outfile=6257_bkg_reproj_clean.fits
+pset reproject_events aspect=pcadf233382181N002_asol1.fits
+pset reproject_events match=6257_reproj_clean.fits
+pset reproject_events random=0
+reproject_events verbose=5 clobber=yes
+ 
+
+# Because we've created SO many files at this point, I recommend making a top level directory 
+# with copies of the most important spectral files (science and background) so that we can stay organized.
+ 
+
+################################ 7. IMAGE PROCESSING #########################################
+
+# Crop the fluxed mosaics
+dmcopy "broad_flux.img[bin x=3690:4350:1,y=3740:4360:1]" HercA_fluxed_broad.fits clobber=yes
+dmcopy "soft_flux.img[bin x=3690:4350:1,y=3740:4360:1]" HercA_fluxed_soft.fits clobber=yes
+dmcopy "medium_flux.img[bin x=3690:4350:1,y=3740:4360:1]" HercA_fluxed_medium.fits clobber=yes
+dmcopy "hard_flux.img[bin x=3690:4350:1,y=3740:4360:1]" HercA_fluxed_hard.fits clobber=yes
+# Similarly crop one of the blank sky background files
+
+# IMPORTANT FOR CONTBIN: remember the crop boundaries: x=3690:4350:1, y=3740:4360:1
+dmcopy "1625_bkg_reproj_clean.fits[bin x=3690:4351:1,y=3740:4361:1]" bkg_image.fits clobber=yes
+
+# Smooth the HercA_fluxed_soft.fits to an elliptical model (e.g. with a huge smoothing length like 30)
+# Then scale (with dmimgcalc) the smoothed model to roughly the brightness of the broad 0.5-7 keV map (factor of ~43)
+csmooth HercA_fluxed_soft.fits clobber=yes
+# use 30,30 for max and min
+
+#dmimgcalc infile infile2 outfile operation [weight] [weight2]
+dmimgcalc infile=ellipmod.fits infile2=none op="imgout=img1*43" out="ellipmod_scaled.fits" mode=h
+# Then subtract the elliptical model from the broad exposure corrected image
+dmimgcalc HercA_fluxed_broad.fits ellipmod_scaled.fits HercA_thermalremoved.fits SUB
+ 
+# Search for point sources
+punlearn celldetect
+pset celldetect infile=HercA_thermalremoved.fits
+pset celldetect outfile=celldetect_src.fits
+pset celldetect regfile=celldetect_src.reg
+pset celldetect thresh=1.0
+#pset celldetect ellsigma=5.0
+pset celldetect fixedcell=6.0
+pset celldetect bkgfile=bkg_image.fits
+celldetect verbose=5 clobber=yes
+dmlist celldetect_src.fits blocks
+dmlist "celldetect_src.fits[cols RA,DEC,POS]" data
+# It doesn't work! No point sources found. I'll make my own mask.
+dmcopy "HercA_fluxed_broad.fits[exclude sky=region(manual_mask.reg)]" csmooth_input.fits clobber=yes
+
+# Adaptively smooth the 0.5-7 keV image
+
+punlearn ardlib
+punlearn csmooth
+csmooth infile=csmooth_input.fits outfile=HercA_broad_AdapSmooth.fits outsigfile=smooth.sig outsclfile=smooth.kernel sclmode=compute conmeth=slide clobber=yes verbose=5 sigmin=2 sigmax=100 sclmin=INDEF sclmax=1.5 bkgmap=HercA_thermalremoved.fits
+# we (roughly) use the HercA_thermalremoved.fits for the background in CSMOOTH's S/N calculation
+# Make an unsharp mask
+# spatial resolution of acis pixel is 0.49"
+csmooth infile=csmooth_input.fits outfile=unsharp_numerator.fits conmeth=fft sclmin=2.0 sclmax=2.0 clobber=yes
+csmooth infile=csmooth_input.fits outfile=unsharp_denominator.fits conmeth=fft sclmin=20.0 sclmax=20.0 clobber=yes
+dmimgcalc HercA_broad_AdapSmooth.fits unsharp_denominator.fits sum.fits ADD clobber=yes
+dmimgcalc HercA_broad_AdapSmooth.fits unsharp_denominator.fits sub.fits SUB clobber=yes
+dmimgcalc sub.fits sum.fits HercA_unsharp.fits DIV clobber=yes
+ 
+################################ 8. Contour Binning #########################################
+# this must be done on a COUNTS image!!
+#pwd
+#/home/gtrembla/Science/radiogal/HercA/data/chandra/datasource/contour_binning/regions_sn30
+
+# make a crop of the merged event file created by reproject_obs
+dmcopy "merged_evt.fits[energy=500:7000][bin x=3690:4350:1,y=3740:4360:1]" contbin_input.fits
+# Be careful here. Make sure the binning and x,y ranges are EXACTLY that for your science (spectral) files. 
+# otherwise the regions wont match and things will be screwed up.
+# Now we will make a mask. In ds9 make a rectangular region to contain the region of data to bin (inside the chip). 
+# Save this region as a CIAO format region file (change the region file format to CIAO), using the name mask.reg. We will make a mask fits image by doing:
+heainit
+farith contbin_input.fits 0 temp.fits MUL
+farith temp.fits 1 allones.fits ADD
+rm temp.fits
+dmcopy "allones.fits[sky=region(mask.reg)][opt full]" mask.fits
+rm allones.fits
+contbin --mask=mask.fits --sn=30 --smoothsn=3 --constrainfill --constrainval=2. contbin_input.fits
+# I'm reasonably happy with this.
+mkdir regions_sn30
+make_region_files --minx=3690 --miny=3740 --bin=1 --outdir=regions_sn30 contbin_binmap.fits
+# Now we have our regions. Let's copy these
+ 
+# Now I'm going to make a big map with big bins, to see if I can see corellations with radio source
+# morphology
+#pwd
+#/home/gtrembla/Science/radiogal/HercA/data/chandra/datasource/contour_binning/full_FOV
+ 
+contbin --sn=30 --smoothsn=10 --constrainfill --constrainval=3.0 contbin_input.fits
+make_region_files --minx=3690 --miny=3740 --bin=1 contbin_binmap.fits
+cp *.reg /home/gtrembla/Science/radiogal/HercA/data/chandra/datasource/contour_binning/full_FOV
+ 
+
+################################################################################################
+ 
+
+################################### 9. Spectral Maps ##########################################
+ 
+# Make the region list
+ls -1 *.reg > base.txt
+# Open base.txt in vim (or whatever), and search and replace ".reg" with blank (e.g. delete it) all lines should read xaf_###
+awk -f combine.awk base.txt > region_list.txt
+heainit
+ciao 
+# note these need to be called in THIS order only!
+
+python extract_contbin_spectra.py /home/gtrembla/Science/radiogal/HercA/data/chandra/datasource/
+# Open xspec
+xspec
+# in XSPEC, type this
+@/home/gtrembla/Science/radiogal/HercA/data/chandra/spectral_maps/sn30/fit_contbin_spectra.tcl
+
+paint_output_images --binmap=contbin_binmap.fits
+
+#kT_out = temperature map
+#Z_out = abundance map 
+#Norm_out = emission measure map (in units of cm^-5 arcsec^-2)
+
+# Make pseudo-pressure map: 
+# kT_out * Norm_out
+dmimgcalc kT_out.fits Norm_out.fits pseudoPressure_out.fits MUL
+# This pseudo-pressure map is in units of (in units of keV cm^-5 arcsec^-2)
+
+# Now make a pseudo-entropy map:
+dmimgcalc Norm_out.fits none junk.fits op="imgout=(sqrt(img1)**-2)" clobber=yes
+dmimgcalc junk.fits none junk2.fits op="imgout=(img1**0.33333333)" clobber=yes
+dmimgcalc kT_out.fits junk2.fits pseudoEntropy_out.fits MUL
+rm junk.fits
+rm junk2.fits
+# This projected pseudo-Entropy map is in units of keV cm^(5/3) arcsec^(2/3)
+
+################################################################################################
+ 
+################################### 10. 1D Spectral Analysis ##################################
+
+#/home/gtrembla/Science/radiogal/HercA/data/chandra/spectral_analysis_1D/120kpc_aperture_cooling_radius
+# I am simply going to copy everything from /prepared_spectral_data/ to each local directory in which 
+# I'm making spectra. Makes it more portable.
+
+punlearn ardlib
+punlearn specextract
+pset specextract infile="1625_reproj_clean.fits[sky=region(120kpc_aperture.reg)]"
+pset specextract outroot=1625_spec_30bin
+pset specextract bkgfile=1625_bkg_reproj_clean.fits
+pset specextract asp=@1625_asol1.lis
+pset specextract mskfile=1625_msk1.fits
+pset specextract badpixfile=1625_bpix1.fits
+pset specextract pbkfile=1625_pbk0.fits
+pset specextract weight=yes # weight=yes, correct=no for an extended source. Correct=no means there is no point source correction. 
+pset specextract correct=no
+pset specextract grouptype=NUM_CTS binspec=30 # bin to 30 count bins
+specextract verbose=5 clobber=yes # this extracts the spectra and makes the appropriate response and ancillary response files
+ 
+punlearn ardlib
+punlearn specextract
+
+pset specextract infile="5796_reproj_clean.fits[sky=region(120kpc_aperture.reg)]"
+pset specextract outroot=5796_spec_30bin
+pset specextract bkgfile=5796_bkg_reproj_clean.fits
+pset specextract asp=@5796_asol1.lis
+pset specextract mskfile=5796_msk1.fits
+pset specextract badpixfile=5796_bpix1.fits
+pset specextract pbkfile=5796_pbk0.fits
+pset specextract weight=yes # weight=yes, correct=no for an extended source. Correct=no means there is no point source correction. 
+pset specextract correct=no
+pset specextract grouptype=NUM_CTS binspec=30 # bin to 30 count bins
+specextract verbose=5 clobber=yes # this extracts the spectra and makes the appropriate response and ancillary response files
+
+punlearn ardlib
+punlearn specextract
+
+pset specextract infile="6257_reproj_clean.fits[sky=region(120kpc_aperture.reg)]"
+pset specextract outroot=6257_spec_30bin
+pset specextract bkgfile=6257_bkg_reproj_clean.fits
+pset specextract asp=@6257_asol1.lis
+pset specextract mskfile=6257_msk1.fits
+pset specextract badpixfile=6257_bpix1.fits
+pset specextract pbkfile=6257_pbk0.fits
+pset specextract weight=yes # weight=yes, correct=no for an extended source. Correct=no means there is no point source correction. 
+pset specextract correct=no
+pset specextract grouptype=NUM_CTS binspec=30 # bin to 30 count bins
+specextract verbose=5 clobber=yes # this extracts the spectra and makes the appropriate response and ancillary response files
+
+# Now let's load 5796 and 6257 in XSPEC and fit a reduced cooling flow model. Note that I'm skipping 1625 because it's more noisy.
+# in XSPEC:
+cpd /xw
+setplot add 
+# that will plot individual model components
+setplot energy
+abund wilm
+xsect vern
+
+data 5796_spec_30bin_grp.pi 6257_spec_30bin_grp.pi
+ignore 1:**-0.5 2:**-0.5
+ignore 1:7.0-** 2:7.0-**
+ignore bad
+plot data
+
+model wabs(mekal+mkcflow)
+renorm auto
+newpar 1 0.0618
+freeze 1
+newpar 4 0.4
+freeze 4
+newpar 5 0.15400
+freeze 5
+newpar 9=2
+newpar 10=4
+newpar 11=5
+newpar 12 0
+fit 1000
+# Enter iplot to make a publishable plot of this
+plot data resid
+iplot
+
+lw 5
+font roman
+csize 1.2
+label top 120 kpc aperture (cooling radius)
+t off
+co 4 on 1
+co 1 on 5
+co 3 on 7
+co 5 on 8
+co 4 on 13
+lw 6 on 6
+lw 6 on 7
+lw 6 on 8
+ma 1 on 7
+ma 1 on 8
+plot
+h Reduced_cooling_flow.ps/cps
+ 
+################################################################################################
+
+############################## 10a.Spectral Analysis of X-ray jet region ######################
+ 
+ 
+punlearn ardlib
+punlearn specextract
+pset specextract infile="1625_reproj_clean.fits[sky=region(Xrayjet.reg)]"
+pset specextract outroot=1625_spec_XrayJet_30bin
+pset specextract bkgfile=1625_bkg_reproj_clean.fits
+pset specextract asp=@1625_asol1.lis
+pset specextract mskfile=1625_msk1.fits
+pset specextract badpixfile=1625_bpix1.fits
+pset specextract pbkfile=1625_pbk0.fits
+pset specextract weight=yes # weight=yes, correct=no for an extended source. Correct=no means there is no point source correction. 
+pset specextract correct=no
+pset specextract grouptype=NUM_CTS binspec=30 # bin to 30 count bins
+specextract verbose=5 clobber=yes # this extracts the spectra and makes the appropriate response and ancillary response files
+ 
+punlearn ardlib
+punlearn specextract
+
+pset specextract infile="5796_reproj_clean.fits[sky=region(Xrayjet.reg)]"
+pset specextract outroot=5796_spec_XrayJet_30bin
+pset specextract bkgfile=5796_bkg_reproj_clean.fits
+pset specextract asp=@5796_asol1.lis
+pset specextract mskfile=5796_msk1.fits
+pset specextract badpixfile=5796_bpix1.fits
+pset specextract pbkfile=5796_pbk0.fits
+pset specextract weight=yes # weight=yes, correct=no for an extended source. Correct=no means there is no point source correction. 
+pset specextract correct=no
+pset specextract grouptype=NUM_CTS binspec=30 # bin to 30 count bins
+specextract verbose=5 clobber=yes # this extracts the spectra and makes the appropriate response and ancillary response files
+ 
+punlearn ardlib
+punlearn specextract
+
+pset specextract infile="6257_reproj_clean.fits[sky=region(Xrayjet.reg)]"
+pset specextract outroot=6257_spec_XrayJet_30bin
+pset specextract bkgfile=6257_bkg_reproj_clean.fits
+pset specextract asp=@6257_asol1.lis
+pset specextract mskfile=6257_msk1.fits
+pset specextract badpixfile=6257_bpix1.fits
+pset specextract pbkfile=6257_pbk0.fits
+pset specextract weight=yes # weight=yes, correct=no for an extended source. Correct=no means there is no point source correction. 
+pset specextract correct=no
+pset specextract grouptype=NUM_CTS binspec=30 # bin to 30 count bins
+specextract verbose=5 clobber=yes # this extracts the spectra and makes the appropriate response and ancillary response files
+
+# in XSPEC:
+cpd /xw
+setplot add 
+# that will plot individual model components
+setplot energy
+renorm auto
+data 1625_spec_XrayJet_30bin_grp.pi 5796_spec_XrayJet_30bin_grp.pi 6257_spec_XrayJet_30bin_grp.pi
+ignore 1:**-0.3 2:**-0.3 3:**-0.3
+ignore 1:7.0-** 2:7.0-** 3:7.0-**
+ignore bad
+model wabs(mekal+pow)
+newpar 1 0.0618
+freeze 1
+newpar 4 0.4
+freeze 4
+newpar 5 0.15400
+freeze 5
+newpar 8 1.5
+freeze 8
+ 
+################################################################################################
+
+##################################### 11. Radial Profiles ######################################
