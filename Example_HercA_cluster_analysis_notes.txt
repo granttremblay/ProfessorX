@@ -1,3 +1,4 @@
+### Uploaded first to github on Jan 21, 2015
 # Reduction and analysis for HERCULES A Chandra Observations
 # G. R. Tremblay (ESO), January 2013
 # 
